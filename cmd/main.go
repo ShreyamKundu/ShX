@@ -16,6 +16,7 @@ func main() {
 		"exit": exitHandler,
 		"echo": echoHandler,
 		"type": typeHandler,
+		"pwd":  pwdHandler,
 	}
 
 	for {
@@ -60,7 +61,12 @@ func typeHandler(args []string) {
 	}
 
 	cmd := args[1]
-	builtins := map[string]bool{"echo": true, "exit": true, "type": true}
+	builtins := map[string]bool{
+		"echo": true,
+		"exit": true,
+		"type": true,
+		"pwd":  true,
+	}
 
 	if builtins[cmd] {
 		fmt.Println(cmd + " is a shell builtin")
@@ -75,10 +81,16 @@ func executeCommand(fields []string) {
 	cmd := exec.Command(fields[0], fields[1:]...)
 
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr // Capture errors from the command
+	cmd.Stderr = os.Stderr
 
 	// Run the command
 	if err := cmd.Run(); err != nil {
 		fmt.Println(fields[0] + ": command not found")
 	}
+}
+
+// Built-in: type
+func pwdHandler(args []string) {
+	cwd, _ := os.Getwd()
+	fmt.Println(cwd)
 }
