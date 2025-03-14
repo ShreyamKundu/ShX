@@ -27,8 +27,31 @@ func main() {
 			os.Exit(0)
 		case strings.HasPrefix(command, "echo "):
 			fmt.Println(strings.TrimPrefix(command, "echo "))
+		case strings.HasPrefix(command, "type "):
+			checkType(command)
 		default:
 			fmt.Println(command + ": command not found")
 		}
+	}
+}
+
+func checkType(command string) {
+	args := strings.Fields(command)
+	if len(args) < 2 {
+		fmt.Println("type: missing argument")
+		return
+	}
+
+	builtins := map[string]bool{
+		"echo": true,
+		"exit": true,
+		"type": true,
+	}
+
+	cmd := args[1]
+	if builtins[cmd] {
+		fmt.Println(cmd + " is a shell builtin")
+	} else {
+		fmt.Println(cmd + ": not found")
 	}
 }
