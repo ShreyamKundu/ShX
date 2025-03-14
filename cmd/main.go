@@ -22,9 +22,11 @@ func main() {
 		}
 
 		command = strings.TrimSpace(command)
-		switch command {
-		case "exit 0":
+		switch {
+		case command == "exit 0":
 			os.Exit(0)
+		case strings.HasPrefix(command, "echo "):
+			fmt.Println(strings.TrimPrefix(command, "echo "))
 		default:
 			fmt.Println(command + ": command not found")
 		}
