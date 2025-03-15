@@ -17,10 +17,11 @@ func main() {
 		"echo": echoHandler,
 		"type": typeHandler,
 		"pwd":  pwdHandler,
+		"cd":   cdHandler,
 	}
 
 	for {
-		fmt.Fprint(os.Stdout, "\033[1;32mShX\033[0m ➜ ")
+		fmt.Fprint(os.Stdout, "$ ")
 		// Read user input
 		command, err := reader.ReadString('\n')
 		if err != nil {
@@ -66,6 +67,7 @@ func typeHandler(args []string) {
 		"exit": true,
 		"type": true,
 		"pwd":  true,
+		"cd":   true,
 	}
 
 	if builtins[cmd] {
@@ -93,4 +95,17 @@ func executeCommand(fields []string) {
 func pwdHandler(args []string) {
 	cwd, _ := os.Getwd()
 	fmt.Println(cwd)
+}
+
+// Built-in: cd
+func cdHandler(args []string) {
+	if len(args) < 2 {
+		fmt.Println("cd: missing argument")
+		return
+	}
+
+	dir := args[1]
+	if err := os.Chdir(dir); err != nil {
+		fmt.Printf("cd: %s: No such file or directory\n", dir)
+	}
 }
