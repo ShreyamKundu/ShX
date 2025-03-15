@@ -21,7 +21,7 @@ func main() {
 	}
 
 	for {
-		fmt.Fprint(os.Stdout, "$ ")
+		fmt.Fprint(os.Stdout, "\033[1;32mShX\033[0m ➜ ")
 		// Read user input
 		command, err := reader.ReadString('\n')
 		if err != nil {
@@ -105,6 +105,15 @@ func cdHandler(args []string) {
 	}
 
 	dir := args[1]
+
+	// Handle "~" (home directory)
+	if dir == "~" {
+		dir = os.Getenv("HOME")
+	} else if strings.HasPrefix(dir, "~/") {
+		dir = os.Getenv("HOME") + dir[1:] // Replace "~" with home path
+	}
+
+	// Change directory
 	if err := os.Chdir(dir); err != nil {
 		fmt.Printf("cd: %s: No such file or directory\n", dir)
 	}
