@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 )
 
@@ -22,7 +23,6 @@ func main() {
 
 	for {
 		fmt.Fprint(os.Stdout, "\033[1;32mShX\033[0m ➜ ")
-		// Read user input
 		command, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error reading input:", err)
@@ -30,7 +30,7 @@ func main() {
 		}
 
 		command = strings.TrimSpace(command)
-		fields := strings.Fields(command)
+		fields := parseCommand(command)
 		if len(fields) == 0 {
 			continue
 		}
@@ -42,6 +42,22 @@ func main() {
 			executeCommand(fields)
 		}
 	}
+}
+
+func parseCommand(command string) []string {
+	re := regexp.MustCompile(`'[^']*'|"[^"]*"|\S+`)
+	matches := re.FindAllString(command, -1)
+
+	var result []string
+
+	for _, match := range matches {
+		if (match[0] == '"' && match[len(match)-1] == '"') || (match[0] == '\'' && match[len(match)-1] == '\'') {
+			result = append(result, match[1:len(match)-1])
+		} else {
+			result = append(result, match)
+		}
+	}
+	return result
 }
 
 // Built-in: exit
@@ -79,19 +95,18 @@ func typeHandler(args []string) {
 	}
 }
 
+// Execute external commands
 func executeCommand(fields []string) {
 	cmd := exec.Command(fields[0], fields[1:]...)
-
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Run the command
 	if err := cmd.Run(); err != nil {
 		fmt.Println(fields[0] + ": command not found")
 	}
 }
 
-// Built-in: type
+// Built-in: pwd
 func pwdHandler(args []string) {
 	cwd, _ := os.Getwd()
 	fmt.Println(cwd)
@@ -110,10 +125,9 @@ func cdHandler(args []string) {
 	if dir == "~" {
 		dir = os.Getenv("HOME")
 	} else if strings.HasPrefix(dir, "~/") {
-		dir = os.Getenv("HOME") + dir[1:] // Replace "~" with home path
+		dir = os.Getenv("HOME") + dir[1:]
 	}
 
-	// Change directory
 	if err := os.Chdir(dir); err != nil {
 		fmt.Printf("cd: %s: No such file or directory\n", dir)
 	}
