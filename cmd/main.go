@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
 	"strings"
 )
 
@@ -22,7 +21,7 @@ func main() {
 	}
 
 	for {
-		fmt.Fprint(os.Stdout, "\033[1;32mShX\033[0m ➜ ")
+		fmt.Fprint(os.Stdout, "$ ")
 		command, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error reading input:", err)
@@ -45,18 +44,68 @@ func main() {
 }
 
 func parseCommand(command string) []string {
-	re := regexp.MustCompile(`'[^']*'|"[^"]*"|\S+`)
-	matches := re.FindAllString(command, -1)
-
 	var result []string
+	var current strings.Builder
+	inSingleQuote := false
+	inDoubleQuote := false
+	escaped := false
 
-	for _, match := range matches {
-		if (match[0] == '"' && match[len(match)-1] == '"') || (match[0] == '\'' && match[len(match)-1] == '\'') {
-			result = append(result, match[1:len(match)-1])
-		} else {
-			result = append(result, match)
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+
+		// Handle escape sequences
+		if escaped {
+			// In bash, when in double quotes, only certain characters are escaped
+			if inDoubleQuote {
+				// Only $, `, ", \, and newline have special meaning when escaped in double quotes
+				if c != '$' && c != '`' && c != '"' && c != '\\' && c != '\n' {
+					current.WriteByte('\\') // Keep the backslash for non-special chars
+				}
+			}
+			current.WriteByte(c)
+			escaped = false
+			continue
 		}
+
+		if c == '\\' {
+			if inSingleQuote {
+				// Backslashes are literal in single quotes
+				current.WriteByte(c)
+			} else {
+				escaped = true
+			}
+			continue
+		}
+
+		// Handle quotes
+		if c == '\'' && !inDoubleQuote {
+			inSingleQuote = !inSingleQuote
+			continue
+		}
+
+		if c == '"' && !inSingleQuote {
+			inDoubleQuote = !inDoubleQuote
+			continue
+		}
+
+		// Handle spaces (word boundaries)
+		if c == ' ' && !inSingleQuote && !inDoubleQuote {
+			if current.Len() > 0 {
+				result = append(result, current.String())
+				current.Reset()
+			}
+			continue
+		}
+
+		// Add character to current word
+		current.WriteByte(c)
 	}
+
+	// Add the last word if there is one
+	if current.Len() > 0 {
+		result = append(result, current.String())
+	}
+
 	return result
 }
 
