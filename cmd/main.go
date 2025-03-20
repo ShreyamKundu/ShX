@@ -3,136 +3,193 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+
+	"golang.org/x/term"
 )
 
+var builtinCMDs = []string{
+	"exit",
+	"echo",
+	"type",
+	"pwd",
+	"cd",
+}
+
+type CMD struct {
+	Name   string
+	Args   []string
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
 func main() {
-	reader := bufio.NewReader(os.Stdin)
-
-	// Define built-in commands using a map
-	builtins := map[string]func([]string){
-		"exit": exitHandler,
-		"echo": echoHandler,
-		"type": typeHandler,
-		"pwd":  pwdHandler,
-		"cd":   cdHandler,
-	}
-
 	for {
-		fmt.Fprint(os.Stdout, "$ ")
-		command, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Error reading input:", err)
-			os.Exit(1)
-		}
-
-		command = strings.TrimSpace(command)
-		if command == "" {
+		// Print prompt
+		fmt.Fprint(os.Stdout, "\r$ ")
+		// Read the user input in raw mode with autocomplete support.
+		input := readInputWithAutocomplete(os.Stdin)
+		input = strings.TrimSpace(input)
+		if input == "" {
 			continue
 		}
 
-		fields := parseCommand(command)
+		fields := parseCommand(input)
 		if len(fields) == 0 {
 			continue
 		}
 
-		// Look for redirection operators
-		stdoutRedirFile := ""
-		stderrRedirFile := ""
-		stdoutAppend := false
-		stderrAppend := false
-
-		// Process redirection operators
-		fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend = processRedirectionOperators(fields)
+		// Process redirection operators.
+		fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend := processRedirectionOperators(fields)
 		if len(fields) == 0 {
 			continue
 		}
 
-		// Check if the command is built-in or external
+		// Map of built-in commands.
+		builtins := map[string]func([]string){
+			"exit": exitHandler,
+			"echo": echoHandler,
+			"type": typeHandler,
+			"pwd":  pwdHandler,
+			"cd":   cdHandler,
+		}
+
+		// Execute built-in or external commands.
 		if handler, exists := builtins[fields[0]]; exists {
 			executeBuiltinWithRedirection(handler, fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend)
 		} else {
-			// For external commands
 			executeExternalWithRedirection(fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend)
 		}
 	}
 }
 
-// Process redirection operators in the command
+func readInputWithAutocomplete(rd *os.File) string {
+	oldState, err := term.MakeRaw(int(rd.Fd()))
+	if err != nil {
+		panic(err)
+	}
+	defer term.Restore(int(rd.Fd()), oldState)
+
+	var input string
+	r := bufio.NewReader(rd)
+	for {
+		rn, _, err := r.ReadRune()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error reading input:", err)
+			continue
+		}
+		switch rn {
+		case '\x03': // Ctrl+C
+			os.Exit(0)
+		case '\r', '\n': // Enter key
+			fmt.Fprint(os.Stdout, "\r\n")
+			return input
+		case '\x7F': // Backspace
+			if len(input) > 0 {
+				input = input[:len(input)-1]
+			}
+			// Clear line and reprint prompt with input.
+			fmt.Fprint(os.Stdout, "\r\x1b[K$ "+input)
+		case '\t': // Tab key: autocomplete
+			suffix := autocomplete(input)
+			if suffix != "" {
+				input += suffix + " "
+			}
+			// Clear line and reprint prompt with updated input.
+			fmt.Fprint(os.Stdout, "\r\x1b[K$ "+input)
+		default:
+			input += string(rn)
+			// Clear line and reprint prompt with updated input.
+			fmt.Fprint(os.Stdout, "\r\x1b[K$ "+input)
+		}
+	}
+}
+
+// autocomplete returns the missing suffix if the current input uniquely matches a built-in command.
+func autocomplete(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	var matches []string
+	for _, cmd := range builtinCMDs {
+		// Only autocomplete the command if the entire input is the command (no spaces yet)
+		if !strings.Contains(prefix, " ") {
+			if strings.HasPrefix(cmd, prefix) && cmd != prefix {
+				matches = append(matches, cmd)
+			}
+		}
+	}
+	if len(matches) == 1 {
+		// Return the missing part of the command.
+		return strings.TrimPrefix(matches[0], prefix)
+	}
+	return ""
+}
+
 func processRedirectionOperators(fields []string) ([]string, string, string, bool, bool) {
 	stdoutRedirFile := ""
 	stderrRedirFile := ""
 	stdoutAppend := false
 	stderrAppend := false
 
+	var finalFields []string
 	i := 0
 	for i < len(fields) {
-		// Check for append redirection operators (>> or 1>>)
-		if fields[i] == ">>" || fields[i] == "1>>" {
+		token := fields[i]
+		if token == ">>" || token == "1>>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
 				return []string{}, "", "", false, false
 			}
 			stdoutRedirFile = fields[i+1]
 			stdoutAppend = true
-			// Remove the redirection tokens from the command fields
-			fields = append(fields[:i], fields[i+2:]...)
+			i += 2
 			continue
 		}
-
-		// Check for output redirection operators (> or 1>)
-		if fields[i] == ">" || fields[i] == "1>" {
+		if token == ">" || token == "1>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
 				return []string{}, "", "", false, false
 			}
 			stdoutRedirFile = fields[i+1]
-			// Remove the redirection tokens from the command fields
-			fields = append(fields[:i], fields[i+2:]...)
+			i += 2
 			continue
 		}
-
-		// Check for stderr redirection operator (2>)
-		if fields[i] == "2>" {
+		if token == "2>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
 				return []string{}, "", "", false, false
 			}
 			stderrRedirFile = fields[i+1]
-			// Remove the redirection tokens from the command fields
-			fields = append(fields[:i], fields[i+2:]...)
+			i += 2
 			continue
 		}
-
-		// Check for stderr append redirection operator (2>>)
-		if fields[i] == "2>>" {
+		if token == "2>>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
 				return []string{}, "", "", false, false
 			}
 			stderrRedirFile = fields[i+1]
 			stderrAppend = true
-			// Remove the redirection tokens from the command fields
-			fields = append(fields[:i], fields[i+2:]...)
+			i += 2
 			continue
 		}
-
+		finalFields = append(finalFields, token)
 		i++
 	}
 
-	return fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend
+	return finalFields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend
 }
 
-// Execute built-in commands with redirection
 func executeBuiltinWithRedirection(handler func([]string), args []string,
 	stdoutFile, stderrFile string, stdoutAppend, stderrAppend bool) {
 
 	oldStdout := os.Stdout
 	oldStderr := os.Stderr
 
-	// Handle stdout redirection
 	var stdoutFileHandle *os.File
 	if stdoutFile != "" {
 		var err error
@@ -141,7 +198,6 @@ func executeBuiltinWithRedirection(handler func([]string), args []string,
 		} else {
 			stdoutFileHandle, err = os.Create(stdoutFile)
 		}
-
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
 			return
@@ -153,7 +209,6 @@ func executeBuiltinWithRedirection(handler func([]string), args []string,
 		}()
 	}
 
-	// Handle stderr redirection
 	var stderrFileHandle *os.File
 	if stderrFile != "" {
 		var err error
@@ -162,7 +217,6 @@ func executeBuiltinWithRedirection(handler func([]string), args []string,
 		} else {
 			stderrFileHandle, err = os.Create(stderrFile)
 		}
-
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
 			return
@@ -174,11 +228,9 @@ func executeBuiltinWithRedirection(handler func([]string), args []string,
 		}()
 	}
 
-	// Execute the command
 	handler(args)
 }
 
-// Execute external commands with redirection
 func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile string,
 	stdoutAppend, stderrAppend bool) {
 
@@ -187,20 +239,16 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 		return
 	}
 
-	// Ensure command exists before execution
 	path, err := exec.LookPath(fields[0])
 	if err != nil {
 		if stderrFile != "" {
-			// If stderr is being redirected, write the error message to the specified file
 			var f *os.File
 			var fileErr error
-
 			if stderrAppend {
 				f, fileErr = os.OpenFile(stderrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			} else {
 				f, fileErr = os.Create(stderrFile)
 			}
-
 			if fileErr != nil {
 				fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", fileErr)
 				return
@@ -214,18 +262,14 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 	}
 
 	cmd := exec.Command(path, fields[1:]...)
-
-	// Set up stdout redirection
 	if stdoutFile != "" {
 		var f *os.File
 		var err error
-
 		if stdoutAppend {
 			f, err = os.OpenFile(stdoutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		} else {
 			f, err = os.Create(stdoutFile)
 		}
-
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
 			return
@@ -236,17 +280,14 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 		cmd.Stdout = os.Stdout
 	}
 
-	// Set up stderr redirection
 	if stderrFile != "" {
 		var f *os.File
 		var err error
-
 		if stderrAppend {
 			f, err = os.OpenFile(stderrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		} else {
 			f, err = os.Create(stderrFile)
 		}
-
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
 			return
@@ -260,12 +301,10 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 	cmd.Run()
 }
 
-// Execute external commands
 func executeCommand(fields []string) {
 	cmd := exec.Command(fields[0], fields[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	if err := cmd.Run(); err != nil {
 		fmt.Println(fields[0] + ": command not found")
 	}
@@ -280,8 +319,6 @@ func parseCommand(command string) []string {
 
 	for i := 0; i < len(command); i++ {
 		c := command[i]
-
-		// Handle escape sequences
 		if escaped {
 			if inDoubleQuote {
 				if c != '$' && c != '`' && c != '"' && c != '\\' && c != '\n' {
@@ -302,7 +339,6 @@ func parseCommand(command string) []string {
 			continue
 		}
 
-		// Handle quotes
 		if c == '\'' && !inDoubleQuote {
 			inSingleQuote = !inSingleQuote
 			continue
@@ -313,7 +349,6 @@ func parseCommand(command string) []string {
 			continue
 		}
 
-		// Handle spaces (word boundaries)
 		if c == ' ' && !inSingleQuote && !inDoubleQuote {
 			if current.Len() > 0 {
 				result = append(result, current.String())
@@ -332,23 +367,19 @@ func parseCommand(command string) []string {
 	return result
 }
 
-// Built-in: exit
 func exitHandler(args []string) {
 	os.Exit(0)
 }
 
-// Built-in: echo
 func echoHandler(args []string) {
 	fmt.Println(strings.Join(args[1:], " "))
 }
 
-// Built-in: type
 func typeHandler(args []string) {
 	if len(args) < 2 {
 		fmt.Println("type: missing argument")
 		return
 	}
-
 	cmd := args[1]
 	builtins := map[string]bool{
 		"echo": true,
@@ -357,7 +388,6 @@ func typeHandler(args []string) {
 		"pwd":  true,
 		"cd":   true,
 	}
-
 	if builtins[cmd] {
 		fmt.Println(cmd + " is a shell builtin")
 	} else if path, err := exec.LookPath(cmd); err == nil {
@@ -367,26 +397,22 @@ func typeHandler(args []string) {
 	}
 }
 
-// Built-in: pwd
 func pwdHandler(args []string) {
 	cwd, _ := os.Getwd()
 	fmt.Println(cwd)
 }
 
-// Built-in: cd
 func cdHandler(args []string) {
 	if len(args) < 2 {
 		fmt.Println("cd: missing argument")
 		return
 	}
-
 	dir := args[1]
 	if dir == "~" {
 		dir = os.Getenv("HOME")
 	} else if strings.HasPrefix(dir, "~/") {
 		dir = os.Getenv("HOME") + dir[1:]
 	}
-
 	if err := os.Chdir(dir); err != nil {
 		fmt.Printf("cd: %s: No such file or directory\n", dir)
 	}
