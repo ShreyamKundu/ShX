@@ -38,35 +38,55 @@ func main() {
 			continue
 		}
 
+		// Look for redirection operators
 		stdoutRedirFile := ""
 		stderrRedirFile := ""
+		stdoutAppend := false
+		stderrAppend := false
 
 		// Process redirection operators
-		fields, stdoutRedirFile, stderrRedirFile = processRedirectionOperators(fields)
+		fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend = processRedirectionOperators(fields)
 		if len(fields) == 0 {
 			continue
 		}
 
 		// Check if the command is built-in or external
 		if handler, exists := builtins[fields[0]]; exists {
-			executeBuiltinWithRedirection(handler, fields, stdoutRedirFile, stderrRedirFile)
+			executeBuiltinWithRedirection(handler, fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend)
 		} else {
-			executeExternalWithRedirection(fields, stdoutRedirFile, stderrRedirFile)
+			// For external commands
+			executeExternalWithRedirection(fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend)
 		}
 	}
 }
 
 // Process redirection operators in the command
-func processRedirectionOperators(fields []string) ([]string, string, string) {
+func processRedirectionOperators(fields []string) ([]string, string, string, bool, bool) {
 	stdoutRedirFile := ""
 	stderrRedirFile := ""
+	stdoutAppend := false
+	stderrAppend := false
 
 	i := 0
 	for i < len(fields) {
+		// Check for append redirection operators (>> or 1>>)
+		if fields[i] == ">>" || fields[i] == "1>>" {
+			if i+1 >= len(fields) {
+				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
+				return []string{}, "", "", false, false
+			}
+			stdoutRedirFile = fields[i+1]
+			stdoutAppend = true
+			// Remove the redirection tokens from the command fields
+			fields = append(fields[:i], fields[i+2:]...)
+			continue
+		}
+
+		// Check for output redirection operators (> or 1>)
 		if fields[i] == ">" || fields[i] == "1>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
-				return []string{}, "", ""
+				return []string{}, "", "", false, false
 			}
 			stdoutRedirFile = fields[i+1]
 			// Remove the redirection tokens from the command fields
@@ -74,10 +94,11 @@ func processRedirectionOperators(fields []string) ([]string, string, string) {
 			continue
 		}
 
+		// Check for stderr redirection operator (2>)
 		if fields[i] == "2>" {
 			if i+1 >= len(fields) {
 				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
-				return []string{}, "", ""
+				return []string{}, "", "", false, false
 			}
 			stderrRedirFile = fields[i+1]
 			// Remove the redirection tokens from the command fields
@@ -88,11 +109,13 @@ func processRedirectionOperators(fields []string) ([]string, string, string) {
 		i++
 	}
 
-	return fields, stdoutRedirFile, stderrRedirFile
+	return fields, stdoutRedirFile, stderrRedirFile, stdoutAppend, stderrAppend
 }
 
 // Execute built-in commands with redirection
-func executeBuiltinWithRedirection(handler func([]string), args []string, stdoutFile, stderrFile string) {
+func executeBuiltinWithRedirection(handler func([]string), args []string,
+	stdoutFile, stderrFile string, stdoutAppend, stderrAppend bool) {
+
 	oldStdout := os.Stdout
 	oldStderr := os.Stderr
 
@@ -100,7 +123,12 @@ func executeBuiltinWithRedirection(handler func([]string), args []string, stdout
 	var stdoutFileHandle *os.File
 	if stdoutFile != "" {
 		var err error
-		stdoutFileHandle, err = os.Create(stdoutFile)
+		if stdoutAppend {
+			stdoutFileHandle, err = os.OpenFile(stdoutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		} else {
+			stdoutFileHandle, err = os.Create(stdoutFile)
+		}
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
 			return
@@ -116,7 +144,12 @@ func executeBuiltinWithRedirection(handler func([]string), args []string, stdout
 	var stderrFileHandle *os.File
 	if stderrFile != "" {
 		var err error
-		stderrFileHandle, err = os.Create(stderrFile)
+		if stderrAppend {
+			stderrFileHandle, err = os.OpenFile(stderrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		} else {
+			stderrFileHandle, err = os.Create(stderrFile)
+		}
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
 			return
@@ -133,7 +166,9 @@ func executeBuiltinWithRedirection(handler func([]string), args []string, stdout
 }
 
 // Execute external commands with redirection
-func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile string) {
+func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile string,
+	stdoutAppend, stderrAppend bool) {
+
 	if stdoutFile == "" && stderrFile == "" {
 		executeCommand(fields)
 		return
@@ -144,7 +179,15 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 	if err != nil {
 		if stderrFile != "" {
 			// If stderr is being redirected, write the error message to the specified file
-			f, fileErr := os.Create(stderrFile)
+			var f *os.File
+			var fileErr error
+
+			if stderrAppend {
+				f, fileErr = os.OpenFile(stderrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			} else {
+				f, fileErr = os.Create(stderrFile)
+			}
+
 			if fileErr != nil {
 				fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", fileErr)
 				return
@@ -161,7 +204,15 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 
 	// Set up stdout redirection
 	if stdoutFile != "" {
-		f, err := os.Create(stdoutFile)
+		var f *os.File
+		var err error
+
+		if stdoutAppend {
+			f, err = os.OpenFile(stdoutFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		} else {
+			f, err = os.Create(stdoutFile)
+		}
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
 			return
@@ -174,7 +225,15 @@ func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile stri
 
 	// Set up stderr redirection
 	if stderrFile != "" {
-		f, err := os.Create(stderrFile)
+		var f *os.File
+		var err error
+
+		if stderrAppend {
+			f, err = os.OpenFile(stderrFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		} else {
+			f, err = os.Create(stderrFile)
+		}
+
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
 			return
