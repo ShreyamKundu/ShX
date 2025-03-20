@@ -70,6 +70,7 @@ func readInputWithAutocomplete(rd *os.File) string {
 	if err != nil {
 		panic(err)
 	}
+	// The terminal state is restored explicitly on Ctrl+C or when input is done.
 	defer term.Restore(int(rd.Fd()), oldState)
 
 	var input string
@@ -83,6 +84,7 @@ func readInputWithAutocomplete(rd *os.File) string {
 
 		switch rn {
 		case '\x03': // Ctrl+C
+			term.Restore(int(rd.Fd()), oldState)
 			os.Exit(0)
 		case '\r', '\n': // Enter key
 			fmt.Fprint(os.Stdout, "\r\n")
@@ -114,11 +116,18 @@ func autocomplete(prefix string) string {
 	if prefix == "" || strings.Contains(prefix, " ") {
 		return ""
 	}
+
 	var matches []string
 	for _, cmd := range builtinCMDs {
 		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
 			matches = append(matches, cmd)
 		}
+	}
+
+	if len(matches) == 0 {
+		// Invalid command: ring the bell.
+		fmt.Fprint(os.Stdout, "\a")
+		return ""
 	}
 	if len(matches) == 1 {
 		return strings.TrimPrefix(matches[0], prefix)
@@ -217,7 +226,6 @@ func executeExternalWithRedirection(
 	stdoutFile, stderrFile string,
 	stdoutAppend, stderrAppend bool,
 ) {
-	// No redirection specified; execute normally.
 	if stdoutFile == "" && stderrFile == "" {
 		executeCommand(fields)
 		return
