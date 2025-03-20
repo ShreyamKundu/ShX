@@ -106,6 +106,19 @@ func processRedirectionOperators(fields []string) ([]string, string, string, boo
 			continue
 		}
 
+		// Check for stderr append redirection operator (2>>)
+		if fields[i] == "2>>" {
+			if i+1 >= len(fields) {
+				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
+				return []string{}, "", "", false, false
+			}
+			stderrRedirFile = fields[i+1]
+			stderrAppend = true
+			// Remove the redirection tokens from the command fields
+			fields = append(fields[:i], fields[i+2:]...)
+			continue
+		}
+
 		i++
 	}
 
