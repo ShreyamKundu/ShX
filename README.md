@@ -35,10 +35,12 @@ This project is a great learning resource for **command parsing, REPL (Read-Eval
 
 ---
 
-## **Installation**
+## **Installation**  
 
-Ensure **Go** is installed, then clone and build ShX:
+### **Prerequisites**  
+Ensure **Go** is installed. [Install Go](https://go.dev/doc/install).  
 
+### **Clone & Build**  
 ```bash
 git clone https://github.com/ShreyamKundu/ShX.git
 cd ShX/cmd/
@@ -49,7 +51,7 @@ go build -o ShX main.go
 
 ## **Usage**
 
-Start ShX by running:q
+Start ShX by running:
 
 ```bash
 ./ShX
@@ -236,4 +238,4 @@ unknowncmd: command not found
 
 ShX is a **lightweight yet powerful shell**, ideal for learning and customization. Contributions and feature suggestions are always welcome!
 
-Enjoy coding with **ShX! 🚀**
+Enjoy using **ShX** and happy coding! 🚀
