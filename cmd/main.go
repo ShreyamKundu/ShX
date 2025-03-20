@@ -29,16 +29,65 @@ func main() {
 		}
 
 		command = strings.TrimSpace(command)
+		if command == "" {
+			continue
+		}
+
 		fields := parseCommand(command)
 		if len(fields) == 0 {
 			continue
 		}
 
-		// Check if the command is a built-in
+		// Look for redirection operator (">" or "1>")
+		redirFile := ""
+		for i := 0; i < len(fields); i++ {
+			if fields[i] == ">" || fields[i] == "1>" {
+				if i+1 >= len(fields) {
+					fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
+					fields = []string{}
+					break
+				}
+				redirFile = fields[i+1]
+				// Remove the redirection tokens from the command fields
+				fields = append(fields[:i], fields[i+2:]...)
+				break
+			}
+		}
+
+		if len(fields) == 0 {
+			continue
+		}
+
+		// Check if the command is built-in or external
 		if handler, exists := builtins[fields[0]]; exists {
-			handler(fields)
+			// For built-ins, temporarily change os.Stdout if redirection is requested.
+			if redirFile != "" {
+				f, err := os.Create(redirFile)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "Error opening file for redirection:", err)
+					continue
+				}
+				oldStdout := os.Stdout
+				os.Stdout = f
+				handler(fields)
+				os.Stdout = oldStdout
+				f.Close()
+			} else {
+				handler(fields)
+			}
 		} else {
-			executeCommand(fields)
+			// For external commands, use the file as cmd.Stdout if redirection is requested.
+			if redirFile != "" {
+				f, err := os.Create(redirFile)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "Error opening file for redirection:", err)
+					continue
+				}
+				executeCommandWithRedirection(fields, f)
+				f.Close()
+			} else {
+				executeCommand(fields)
+			}
 		}
 	}
 }
@@ -55,11 +104,9 @@ func parseCommand(command string) []string {
 
 		// Handle escape sequences
 		if escaped {
-			// In bash, when in double quotes, only certain characters are escaped
 			if inDoubleQuote {
-				// Only $, `, ", \, and newline have special meaning when escaped in double quotes
 				if c != '$' && c != '`' && c != '"' && c != '\\' && c != '\n' {
-					current.WriteByte('\\') // Keep the backslash for non-special chars
+					current.WriteByte('\\')
 				}
 			}
 			current.WriteByte(c)
@@ -69,7 +116,6 @@ func parseCommand(command string) []string {
 
 		if c == '\\' {
 			if inSingleQuote {
-				// Backslashes are literal in single quotes
 				current.WriteByte(c)
 			} else {
 				escaped = true
@@ -97,11 +143,9 @@ func parseCommand(command string) []string {
 			continue
 		}
 
-		// Add character to current word
 		current.WriteByte(c)
 	}
 
-	// Add the last word if there is one
 	if current.Len() > 0 {
 		result = append(result, current.String())
 	}
@@ -155,6 +199,25 @@ func executeCommand(fields []string) {
 	}
 }
 
+// Execute external commands with redirection for stdout
+func executeCommandWithRedirection(fields []string, f *os.File) {
+	// Ensure command exists before execution
+	path, err := exec.LookPath(fields[0])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, fields[0]+": command not found")
+		return
+	}
+
+	cmd := exec.Command(path, fields[1:]...)
+	cmd.Stdout = f
+	cmd.Stderr = os.Stderr // Ensure errors go to stderr
+
+	if err := cmd.Run(); err != nil {
+		// Do NOT print "command not found" on execution errors
+		return
+	}
+}
+
 // Built-in: pwd
 func pwdHandler(args []string) {
 	cwd, _ := os.Getwd()
@@ -169,8 +232,6 @@ func cdHandler(args []string) {
 	}
 
 	dir := args[1]
-
-	// Handle "~" (home directory)
 	if dir == "~" {
 		dir = os.Getenv("HOME")
 	} else if strings.HasPrefix(dir, "~/") {
