@@ -38,57 +38,164 @@ func main() {
 			continue
 		}
 
-		// Look for redirection operator (">" or "1>")
-		redirFile := ""
-		for i := 0; i < len(fields); i++ {
-			if fields[i] == ">" || fields[i] == "1>" {
-				if i+1 >= len(fields) {
-					fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
-					fields = []string{}
-					break
-				}
-				redirFile = fields[i+1]
-				// Remove the redirection tokens from the command fields
-				fields = append(fields[:i], fields[i+2:]...)
-				break
-			}
-		}
+		stdoutRedirFile := ""
+		stderrRedirFile := ""
 
+		// Process redirection operators
+		fields, stdoutRedirFile, stderrRedirFile = processRedirectionOperators(fields)
 		if len(fields) == 0 {
 			continue
 		}
 
 		// Check if the command is built-in or external
 		if handler, exists := builtins[fields[0]]; exists {
-			// For built-ins, temporarily change os.Stdout if redirection is requested.
-			if redirFile != "" {
-				f, err := os.Create(redirFile)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "Error opening file for redirection:", err)
-					continue
-				}
-				oldStdout := os.Stdout
-				os.Stdout = f
-				handler(fields)
-				os.Stdout = oldStdout
-				f.Close()
-			} else {
-				handler(fields)
-			}
+			executeBuiltinWithRedirection(handler, fields, stdoutRedirFile, stderrRedirFile)
 		} else {
-			// For external commands, use the file as cmd.Stdout if redirection is requested.
-			if redirFile != "" {
-				f, err := os.Create(redirFile)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "Error opening file for redirection:", err)
-					continue
-				}
-				executeCommandWithRedirection(fields, f)
-				f.Close()
-			} else {
-				executeCommand(fields)
-			}
+			executeExternalWithRedirection(fields, stdoutRedirFile, stderrRedirFile)
 		}
+	}
+}
+
+// Process redirection operators in the command
+func processRedirectionOperators(fields []string) ([]string, string, string) {
+	stdoutRedirFile := ""
+	stderrRedirFile := ""
+
+	i := 0
+	for i < len(fields) {
+		if fields[i] == ">" || fields[i] == "1>" {
+			if i+1 >= len(fields) {
+				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
+				return []string{}, "", ""
+			}
+			stdoutRedirFile = fields[i+1]
+			// Remove the redirection tokens from the command fields
+			fields = append(fields[:i], fields[i+2:]...)
+			continue
+		}
+
+		if fields[i] == "2>" {
+			if i+1 >= len(fields) {
+				fmt.Fprintln(os.Stderr, "syntax error: no file specified for redirection")
+				return []string{}, "", ""
+			}
+			stderrRedirFile = fields[i+1]
+			// Remove the redirection tokens from the command fields
+			fields = append(fields[:i], fields[i+2:]...)
+			continue
+		}
+
+		i++
+	}
+
+	return fields, stdoutRedirFile, stderrRedirFile
+}
+
+// Execute built-in commands with redirection
+func executeBuiltinWithRedirection(handler func([]string), args []string, stdoutFile, stderrFile string) {
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+
+	// Handle stdout redirection
+	var stdoutFileHandle *os.File
+	if stdoutFile != "" {
+		var err error
+		stdoutFileHandle, err = os.Create(stdoutFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
+			return
+		}
+		os.Stdout = stdoutFileHandle
+		defer func() {
+			os.Stdout = oldStdout
+			stdoutFileHandle.Close()
+		}()
+	}
+
+	// Handle stderr redirection
+	var stderrFileHandle *os.File
+	if stderrFile != "" {
+		var err error
+		stderrFileHandle, err = os.Create(stderrFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
+			return
+		}
+		os.Stderr = stderrFileHandle
+		defer func() {
+			os.Stderr = oldStderr
+			stderrFileHandle.Close()
+		}()
+	}
+
+	// Execute the command
+	handler(args)
+}
+
+// Execute external commands with redirection
+func executeExternalWithRedirection(fields []string, stdoutFile, stderrFile string) {
+	if stdoutFile == "" && stderrFile == "" {
+		executeCommand(fields)
+		return
+	}
+
+	// Ensure command exists before execution
+	path, err := exec.LookPath(fields[0])
+	if err != nil {
+		if stderrFile != "" {
+			// If stderr is being redirected, write the error message to the specified file
+			f, fileErr := os.Create(stderrFile)
+			if fileErr != nil {
+				fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", fileErr)
+				return
+			}
+			fmt.Fprintln(f, fields[0]+": command not found")
+			f.Close()
+		} else {
+			fmt.Fprintln(os.Stderr, fields[0]+": command not found")
+		}
+		return
+	}
+
+	cmd := exec.Command(path, fields[1:]...)
+
+	// Set up stdout redirection
+	if stdoutFile != "" {
+		f, err := os.Create(stdoutFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening file for stdout redirection:", err)
+			return
+		}
+		cmd.Stdout = f
+		defer f.Close()
+	} else {
+		cmd.Stdout = os.Stdout
+	}
+
+	// Set up stderr redirection
+	if stderrFile != "" {
+		f, err := os.Create(stderrFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error opening file for stderr redirection:", err)
+			return
+		}
+		cmd.Stderr = f
+		defer f.Close()
+	} else {
+		cmd.Stderr = os.Stderr
+	}
+
+	cmd.Run()
+}
+
+// Execute external commands
+func executeCommand(fields []string) {
+	cmd := exec.Command(fields[0], fields[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Println(fields[0] + ": command not found")
 	}
 }
 
@@ -185,36 +292,6 @@ func typeHandler(args []string) {
 		fmt.Println(cmd + " is " + path)
 	} else {
 		fmt.Println(cmd + ": not found")
-	}
-}
-
-// Execute external commands
-func executeCommand(fields []string) {
-	cmd := exec.Command(fields[0], fields[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		fmt.Println(fields[0] + ": command not found")
-	}
-}
-
-// Execute external commands with redirection for stdout
-func executeCommandWithRedirection(fields []string, f *os.File) {
-	// Ensure command exists before execution
-	path, err := exec.LookPath(fields[0])
-	if err != nil {
-		fmt.Fprintln(os.Stderr, fields[0]+": command not found")
-		return
-	}
-
-	cmd := exec.Command(path, fields[1:]...)
-	cmd.Stdout = f
-	cmd.Stderr = os.Stderr // Ensure errors go to stderr
-
-	if err := cmd.Run(); err != nil {
-		// Do NOT print "command not found" on execution errors
-		return
 	}
 }
 
