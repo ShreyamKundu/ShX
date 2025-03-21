@@ -63,7 +63,7 @@ func main() {
 }
 
 func printPrompt() {
-	fmt.Fprint(os.Stdout, "\r$ ")
+	fmt.Fprint(os.Stdout, "\r\033[1;32mShX\033[0m ➜ ")
 }
 
 // Track the last prefix and tab count for double-tab behavior
@@ -123,12 +123,17 @@ func readInputWithAutocomplete(rd *os.File) string {
 			tabPressCount++
 			result, matches := autocomplete(prefix, tabPressCount)
 
-			if len(matches) > 1 && tabPressCount > 1 {
-				// On second tab press with multiple matches, show all possibilities
+			if len(matches) > 1 && tabPressCount > 1 && result == "" {
+				// On second tab press with no further completion, show all possibilities
 				printAllMatches(matches)
 				printPromptWithInput(input)
 			} else if result != "" {
-				input += result + " "
+				input += result
+				// Add a trailing space only if this completion yields a full match.
+				// Otherwise, leave it to let the user add more characters.
+				if len(matches) == 1 {
+					input += " "
+				}
 				printPromptWithInput(input)
 				// Reset tab count after successful completion
 				tabPressCount = 0
@@ -174,7 +179,7 @@ func autocomplete(prefix string, tabCount int) (string, []string) {
 	// If no built-in command matches, search for external executables in PATH.
 	if len(matches) == 0 {
 		pathEnv := os.Getenv("PATH")
-		dirs := strings.Split(pathEnv, ":")
+		dirs := append([]string{"."}, strings.Split(pathEnv, ":")...)
 		found := make(map[string]bool)
 		for _, dir := range dirs {
 			files, err := os.ReadDir(dir)
@@ -205,11 +210,41 @@ func autocomplete(prefix string, tabCount int) (string, []string) {
 	// Sort matches for consistent display
 	sort.Strings(matches)
 
+	// If only one match exists, complete fully.
 	if len(matches) == 1 {
-		return strings.TrimPrefix(matches[0], prefix), nil
+		return strings.TrimPrefix(matches[0], prefix), matches
 	}
 
-	return "", matches
+	// Compute the longest common prefix of all matches.
+	lcp := longestCommonPrefix(matches)
+	if len(lcp) > len(prefix) {
+		// Return only the additional characters beyond the current prefix.
+		return lcp[len(prefix):], matches
+	}
+
+	// If there's no further common extension and user pressed tab twice, show all possibilities.
+	if tabCount > 1 {
+		return "", matches
+	}
+
+	return "", nil
+}
+
+// longestCommonPrefix returns the longest common prefix string among an array of strings.
+func longestCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	prefix := strs[0]
+	for _, s := range strs[1:] {
+		for !strings.HasPrefix(s, prefix) {
+			if prefix == "" {
+				return ""
+			}
+			prefix = prefix[:len(prefix)-1]
+		}
+	}
+	return prefix
 }
 
 func processRedirectionOperators(fields []string) ([]string, string, string, bool, bool) {

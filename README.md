@@ -205,7 +205,7 @@ ShX ➜ bash
 ---
 
 ## **8. External Command Execution**
-ShX executes external commands like `ls`, `grep`, and `vim` if found in `$PATH`:
+ShX executes external commands like `ls`, `grep`, and `mkdir` if found in `$PATH`:
 
 ```bash
 ShX ➜ ls
