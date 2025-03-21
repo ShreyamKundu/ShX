@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"golang.org/x/term"
@@ -65,6 +66,10 @@ func printPrompt() {
 	fmt.Fprint(os.Stdout, "\r$ ")
 }
 
+// Track the last prefix and tab count for double-tab behavior
+var lastTabPrefix string
+var tabPressCount int
+
 func readInputWithAutocomplete(rd *os.File) string {
 	oldState, err := term.MakeRaw(int(rd.Fd()))
 	if err != nil {
@@ -88,23 +93,64 @@ func readInputWithAutocomplete(rd *os.File) string {
 			os.Exit(0)
 		case '\r', '\n': // Enter key
 			fmt.Fprint(os.Stdout, "\r\n")
+			// Reset tab count on Enter
+			tabPressCount = 0
+			lastTabPrefix = ""
 			return input
 		case '\x7F': // Backspace
 			if len(input) > 0 {
 				input = input[:len(input)-1]
 			}
+			// Reset tab count on any modification
+			tabPressCount = 0
+			lastTabPrefix = ""
 			printPromptWithInput(input)
 		case '\t': // Tab key: autocomplete
-			suffix := autocomplete(input)
-			if suffix != "" {
-				input += suffix + " "
+			prefix := input
+			// If there's a space, we're not autocompleting a command
+			if strings.Contains(prefix, " ") {
+				tabPressCount = 0
+				lastTabPrefix = ""
+				break
 			}
-			printPromptWithInput(input)
+
+			// If prefix is different from last tab, reset counter
+			if prefix != lastTabPrefix {
+				tabPressCount = 0
+				lastTabPrefix = prefix
+			}
+
+			tabPressCount++
+			result, matches := autocomplete(prefix, tabPressCount)
+
+			if len(matches) > 1 && tabPressCount > 1 {
+				// On second tab press with multiple matches, show all possibilities
+				printAllMatches(matches)
+				printPromptWithInput(input)
+			} else if result != "" {
+				input += result + " "
+				printPromptWithInput(input)
+				// Reset tab count after successful completion
+				tabPressCount = 0
+				lastTabPrefix = ""
+			} else {
+				// Ring the bell on first tab or no matches
+				fmt.Fprint(os.Stdout, "\a")
+			}
 		default:
 			input += string(rn)
+			// Reset tab count on any modification
+			tabPressCount = 0
+			lastTabPrefix = ""
 			printPromptWithInput(input)
 		}
 	}
+}
+
+func printAllMatches(matches []string) {
+	fmt.Fprint(os.Stdout, "\r\n")
+	fmt.Fprint(os.Stdout, strings.Join(matches, "  "))
+	fmt.Fprint(os.Stdout, "\r\n")
 }
 
 func printPromptWithInput(input string) {
@@ -112,27 +158,58 @@ func printPromptWithInput(input string) {
 	fmt.Fprint(os.Stdout, "\r\x1b[K$ "+input)
 }
 
-func autocomplete(prefix string) string {
-	if prefix == "" || strings.Contains(prefix, " ") {
-		return ""
+func autocomplete(prefix string, tabCount int) (string, []string) {
+	if prefix == "" {
+		return "", nil
 	}
 
 	var matches []string
+	// First, check built-in commands.
 	for _, cmd := range builtinCMDs {
 		if strings.HasPrefix(cmd, prefix) && cmd != prefix {
 			matches = append(matches, cmd)
 		}
 	}
 
+	// If no built-in command matches, search for external executables in PATH.
 	if len(matches) == 0 {
-		// Invalid command: ring the bell.
-		fmt.Fprint(os.Stdout, "\a")
-		return ""
+		pathEnv := os.Getenv("PATH")
+		dirs := strings.Split(pathEnv, ":")
+		found := make(map[string]bool)
+		for _, dir := range dirs {
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, file := range files {
+				// Skip directories.
+				if file.IsDir() {
+					continue
+				}
+				name := file.Name()
+				// Check if the file name starts with the prefix and is not exactly the prefix.
+				if strings.HasPrefix(name, prefix) && name != prefix {
+					if !found[name] {
+						found[name] = true
+						matches = append(matches, name)
+					}
+				}
+			}
+		}
 	}
+
+	if len(matches) == 0 {
+		return "", nil
+	}
+
+	// Sort matches for consistent display
+	sort.Strings(matches)
+
 	if len(matches) == 1 {
-		return strings.TrimPrefix(matches[0], prefix)
+		return strings.TrimPrefix(matches[0], prefix), nil
 	}
-	return ""
+
+	return "", matches
 }
 
 func processRedirectionOperators(fields []string) ([]string, string, string, bool, bool) {
