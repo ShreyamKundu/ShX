@@ -160,7 +160,7 @@ func printAllMatches(matches []string) {
 
 func printPromptWithInput(input string) {
 	// Clear line and reprint prompt with updated input.
-	fmt.Fprint(os.Stdout, "\r\x1b[K$ "+input)
+	fmt.Fprint(os.Stdout, "\r\x1b[K\033[1;32mShX\033[0m ➜ "+input)
 }
 
 func autocomplete(prefix string, tabCount int) (string, []string) {
